@@ -106,6 +106,11 @@ namespace aspect
         void check_diffusion_time_step (const DoFHandler<dim> &mesh_deformation_dof_handler,
                                         const std::set<types::boundary_id> &boundary_ids) const;
 
+
+        /**
+        */
+        std::vector<Point<dim>> surface_point_locations;
+
         /**
          * The hillslope transport coefficient or diffusivity [m2/s]
          * used in the hillslope diffusion of the deformed

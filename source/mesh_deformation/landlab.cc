@@ -34,7 +34,22 @@
 #include <deal.II/lac/trilinos_precondition.h>
 #include <boost/lexical_cast.hpp>
 
+#include <deal.II/fe/mapping_q_cache.h>
+
+
+#define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
+#include <numpy/arrayobject.h>
+
+PyObject *vector_to_numpy(const std::vector<double> &vec)
+{
+  npy_intp size = vec.size();
+  double *data = const_cast<double *>(vec.data());
+  return PyArray_SimpleNewFromData(1, &size, NPY_DOUBLE, data);
+}
+
+
 
 namespace aspect
 {
@@ -60,6 +75,8 @@ namespace aspect
                   ExcMessage("The surface diffusion mesh deformation plugin only works for Box geometries."));
 
       Py_Initialize();
+      _import_array(); // required for Numpy interop
+
       PyRun_SimpleString("import sys; sys.path.append(\"" ASPECT_SOURCE_DIR "/landlab\")");
 
       // Import Python module
@@ -84,7 +101,7 @@ namespace aspect
       // Clean up
       Py_DECREF(pArgs);
       Py_DECREF(pFunc);
-      Py_DECREF(pModule);
+//      Py_DECREF(pModule);
     }
 
 
@@ -107,6 +124,32 @@ namespace aspect
           else
             apply_diffusion = false;
         }
+
+
+      {
+        PyObject *pFunc = PyObject_GetAttrString(pModule, "define_mesh");
+        PyObject *result = PyObject_CallObject(pFunc, nullptr);
+        PyArrayObject *xcoord_obj = reinterpret_cast<PyArrayObject *>(PyTuple_GetItem(result, 0));
+        PyArrayObject *ycoord_obj = reinterpret_cast<PyArrayObject *>(PyTuple_GetItem(result, 1));
+
+        double *xcoord = static_cast<double *>(PyArray_DATA(xcoord_obj));
+        double *ycoord = static_cast<double *>(PyArray_DATA(ycoord_obj));
+
+        npy_intp size1 = PyArray_SIZE(xcoord_obj);
+        npy_intp size2 = PyArray_SIZE(ycoord_obj);
+        AssertThrow(size1 == size2, ExcMessage("return values do not match."));
+
+        surface_point_locations.resize(size1);
+        for (unsigned i=0; i<size1; ++i)
+          {
+            std::array<double, dim> nat_position = {{xcoord[i], ycoord[i]}};
+            nat_position[dim-1] = 1.0; // depth=0 is z=1
+            surface_point_locations[i] = this->get_geometry_model().natural_to_cartesian_coordinates(nat_position);
+
+            std::cout << xcoord[i] << " - " << ycoord[i] <<std::endl;
+          }
+      }
+
     }
 
 
@@ -118,6 +161,71 @@ namespace aspect
                                         LinearAlgebra::Vector &output,
                                         const std::set<types::boundary_id> &boundary_ids) const
     {
+
+
+      {
+        LinearAlgebra::Vector displacements = this->get_mesh_deformation_handler().get_mesh_displacements();
+
+        Utilities::MPI::RemotePointEvaluation<dim, dim> rpe;
+        MappingQ<dim> mapping(1);
+        rpe.reinit(surface_point_locations, this->get_triangulation(), mapping);
+
+        const unsigned int myrank = Utilities::MPI::this_mpi_process(this->get_mpi_communicator());
+
+        std::vector<double> values1 = VectorTools::point_values<1>(rpe,
+                                                                   mesh_deformation_dof_handler,
+                                                                   displacements,
+                                                                   dealii::VectorTools::EvaluationFlags::avg, /*component*/ 2);
+        std::vector<double> values2 = VectorTools::point_values<1>(rpe,
+                                                                   mesh_deformation_dof_handler,
+                                                                   this->get_mesh_deformation_handler().get_initial_topography(),
+                                                                   dealii::VectorTools::EvaluationFlags::avg, /*component*/ 2);
+
+        for (unsigned int i=0; i<values1.size(); ++i)
+          std::cout << surface_point_locations[i] << " " << (1.0+values1[i]+values2[i]) << std::endl;
+
+        // now back:
+
+        const auto eval_func = [&](const ArrayView< const double > &values,
+                                   const typename Utilities::MPI::RemotePointEvaluation<dim>::CellData &cell_data)
+        {
+// TODO
+        };
+
+//           rpe.template process_and_evaluate<double>(values, eval_func, /*sort_data*/ true);
+
+
+      }
+
+
+      {
+        //def start_update(t):
+        PyObject *pFunc = PyObject_GetAttrString(pModule, "start_update");
+        if (!pFunc || !PyCallable_Check(pFunc))
+          {
+            std::cerr << "Failed to load function" << std::endl;
+            Py_DECREF(pModule);
+            Py_Finalize();
+            return;
+          }
+        std::vector<double> vec = {1.0, 2.0, 3.0};
+        PyObject *arr = vector_to_numpy(vec);
+
+        // Call Python function with communicator handle
+        PyObject *pArgs = PyTuple_Pack(2, PyFloat_FromDouble(this->get_time()), arr);
+        //PyObject* pValue =
+        PyObject_CallObject(pFunc, pArgs);
+
+
+
+
+        Py_DECREF(arr);
+
+        // Clean up
+        Py_DECREF(pArgs);
+        Py_DECREF(pFunc);
+
+      }
 
 
       // Check that the current timestep does not exceed the diffusion timestep
