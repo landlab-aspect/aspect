@@ -141,14 +141,42 @@ namespace aspect
 
           {
             // set_mesh_information: call with None
-            PyObject *pArgs = PyTuple_Pack(1, Py_None);
+            PyObject *pDict = PyDict_New();
+            PyDict_SetItemString(pDict, "Mesh X extent", PyFloat_FromDouble(landlab_x_extent));
+            PyDict_SetItemString(pDict, "Mesh Y extent", PyFloat_FromDouble(landlab_y_extent));
+            PyDict_SetItemString(pDict, "Mesh Spacing", PyFloat_FromDouble(landlab_spacing));
+
+            PyObject *pArgs = PyTuple_Pack(1, pDict);
             PyObject *pValue = call_python_function(pModule, "set_mesh_information", pArgs);
             Py_DECREF(pArgs);
             Py_DECREF(pValue);
           }
 
           {
-            // get grid:
+            // Initialize landlab components
+            // If Use years instead of seconds is false, then we want to make sure we scale the 
+            // parameters in landlab to seconds, since surface processes parameters are reported
+            // typically in years.
+            double time_scaling_factor = 1.0;
+            if (parameters_in_years)
+              time_scaling_factor = year_in_seconds;
+
+            PyObject *pDict = PyDict_New();
+            PyDict_SetItemString(pDict, "Hillslope coefficient", PyFloat_FromDouble(hillslope_diffusion_coefficient / time_scaling_factor));
+            PyDict_SetItemString(pDict, "Stream power erodibility coefficient", PyFloat_FromDouble(stream_power_erodibility_coefficient / time_scaling_factor));
+
+            PyObject *pArgs = PyTuple_Pack(1,
+                                           pDict
+                                          );
+            Py_DECREF(pDict);
+
+            PyObject *pValue = call_python_function(pModule, "initalize_landlab_components", pArgs);
+            Py_DECREF(pArgs);
+            Py_DECREF(pValue);
+          }
+          
+          {
+            // get grid points from the landlab mesh:
             PyObject *pArgs = PyTuple_Pack(1, PyLong_FromLong(-1L));
             PyObject *pgrid_x = call_python_function(pModule, "get_grid_x", pArgs);
             Py_DECREF(pArgs);
@@ -204,8 +232,12 @@ namespace aspect
         {
           // Build a dictionary with solution values for each variable to pass to Python:
           PyObject *pDict = PyDict_New();
-          std::vector<std::string> variable_names = { "x velocity", "y velocity", "z velocity" };
+          // variable names must match those expected by the Landlab script:
+          const std::vector<std::string> variable_names = { "x velocity", "y velocity", "z velocity" };
+          // Create a vector<vector> that is of the shape (n_variables, n_points)
           std::vector<std::vector<double>> variable_data(variable_names.size(),  std::vector<double>(current_solution_at_points.size(), 0.0));
+
+          // Fill variable_data (which corresponds to the LandLab nodal points) with the values from ASPECT.
           for (unsigned int i=0; i<variable_names.size(); ++i)
             {
               for (unsigned int j=0; j<current_solution_at_points.size(); ++j)
@@ -219,15 +251,16 @@ namespace aspect
               PyDict_SetItemString(pDict, variable_names[i].c_str(), pValue.get());
             }
 
-          // Call update_until()
+          // Call update_until(). update_until() returns deposition_erosion. This is what eventually 
+          // gets converted to velocities to deform the ASPECT mesh.
           PyObject *pArgs = PyTuple_Pack(2, PyFloat_FromDouble(this->get_time()), pDict);
           PyObject *pValue = call_python_function(pModule, "update_until", pArgs);
           Py_DECREF(pDict);
           Py_DECREF(pArgs);
 
-          ArrayView<double> data = PythonHelper::numpy_to_array_view(pValue);
+          const ArrayView<const double> data = PythonHelper::numpy_to_array_view(pValue);
           for (size_t i=0; i<data.size(); ++i)
-            velocities[i][dim-1] = data[i];
+            velocities[i][dim-1] = data[i] / (this->get_timestep() > 0.0 ? this->get_timestep() : 1.0);
 
           Py_DECREF(pValue);
         }
@@ -245,7 +278,7 @@ namespace aspect
           {
             real_evaluation_points[i] = this->evaluation_points[i];  // TODO: use mapping to compute real position
             for (unsigned int c=0; c<dim; ++c)
-              data[i][c] = velocities[i][c];
+              data[i][c] = velocities[i][c] / (this->get_timestep() > 0.0 ? this->get_timestep() : 1.0);
           }
 
         const std::vector<std::string> data_component_names(dim, "velocity");
@@ -356,6 +389,33 @@ namespace aspect
                             Patterns::Anything(),
                             "An arbitrary string to be passed to the initialize() function in the "
                             "Python script. Can be used to specify a configuration file or other option.");
+
+          prm.declare_entry("Define LandLab parameters using years", "unspecified",
+                            Patterns::Selection("true|false|unspecified"),
+                            "If true, the LandLab parameters (diffusion coefficient, erodibility, uplift rate) "
+                            "are defined in units per year. If false, they are defined in SI units (per second).");
+          prm.declare_entry("Hillslope diffusion coefficient", "0.01",
+                            Patterns::Double(0),
+                            "Hillslope diffusion coefficient used to compute the mesh deformation. "
+                            "Units: \\si{\\meter\\squared\\per\\year}.");
+          prm.declare_entry("Stream power erodibility coefficient", "1e-4",
+                            Patterns::Double(0),
+                            "Stream power erodibility coefficient used to compute the mesh deformation. "
+                            "Units: \\si{\\meter\\raisedto{-1}\\per\\year}.");
+
+          prm.enter_subsection("Mesh information");
+           {
+              prm.declare_entry("X extent", "100e3",
+                                Patterns::Double(0),
+                                "The extent of the Landlab grid in the x direction. Units: \\si{\\meter}.");
+              prm.declare_entry("Y extent", "100e3",
+                                Patterns::Double(0),
+                                "The extent of the Landlab grid in the y direction. Units: \\si{\\meter}.");
+              prm.declare_entry("Spacing", "1000",
+                                Patterns::Double(0),
+                                "The spacing of the Landlab grid. Units: \\si{\\meter}.");
+           }
+          prm.leave_subsection();
         }
         prm.leave_subsection();
       }
@@ -371,10 +431,28 @@ namespace aspect
       {
         prm.enter_subsection ("Landlab");
         {
-          n_landlab_ranks = prm.get_integer("MPI ranks for Landlab");
-          script_path = prm.get("Script path");
+          n_landlab_ranks    = prm.get_integer("MPI ranks for Landlab");
+          script_path        = prm.get("Script path");
           script_module_name = prm.get("Script name");
-          script_argument = prm.get("Script argument");
+          script_argument    = prm.get("Script argument");
+
+          hillslope_diffusion_coefficient      = prm.get_double("Hillslope diffusion coefficient");
+          stream_power_erodibility_coefficient = prm.get_double("Stream power erodibility coefficient");
+
+          if (prm.get ("Define LandLab parameters using years") == "true")
+            parameters_in_years = true;
+          else if (prm.get ("Define LandLab parameters using years") == "false")
+            parameters_in_years = false;
+          else
+            AssertThrow(false, ExcMessage("The parameter 'Define LandLab parameters using years' must be set to 'true' or 'false'"));
+
+            prm.enter_subsection("Mesh information");
+              {
+                landlab_x_extent = prm.get_double("X extent");
+                landlab_y_extent = prm.get_double("Y extent");
+                landlab_spacing = prm.get_double("Spacing");
+              }
+          prm.leave_subsection();
         }
         prm.leave_subsection ();
       }

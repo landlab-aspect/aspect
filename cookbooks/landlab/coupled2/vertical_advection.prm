@@ -1,0 +1,138 @@
+# This parameter file sets up a model to test the interfacing between
+# the surface processes code LandLab and ASPECT. The model begins with
+# an initial triangular topography that erodes according to Hillslope
+# diffusion over 1 Myr. An analytical solution for this problem exsists
+# via Fourier Transforms, allowing us to quantify how well the interface
+# is performing. We can also compare this to the ASPECT/FastScape interface 
+# to check that both surface processes codes are giving the same answer.
+set Dimension                              = 3
+
+
+set Use years instead of seconds           = true
+set End time                               = 1e6
+set Maximum time step                      = 10e3
+
+
+set Nonlinear solver scheme                = single Advection, single Stokes
+set Pressure normalization                 = surface
+set Surface pressure                       = 0
+set Output directory                       = output-VERTICAL-ADVECTION
+
+subsection Geometry model
+  set Model name = box
+
+  subsection Box
+
+    set Box origin X coordinate = 1e3
+    set Box origin Y coordinate = 1e3
+    set X extent = 100e3
+    set Y extent = 100e3
+    set Z extent = 20e3
+
+    set X repetitions = 20
+    set Y repetitions = 20
+    set Z repetitions = 4
+  end
+end
+
+# Temperature effects are ignored
+subsection Initial temperature model
+  set Model name = function
+  subsection Function
+    set Function expression = 273
+  end
+end
+
+subsection Boundary temperature model
+  set Fixed temperature boundary indicators = bottom, top
+  set List of model names = initial temperature
+end
+
+# Free slip on all boundaries
+subsection Boundary velocity model
+  set Prescribed velocity boundary indicators = left: function, right: function, front: function, back: function, bottom: function
+  subsection Function
+    set Coordinate system =  cartesian
+    set Variable names = x, y, z
+    set Function constants  = uplift=0.01
+    set Function expression = 0; 0; uplift
+  end
+end
+
+subsection Mesh deformation
+  set Mesh deformation boundary indicators = top: Landlab
+  set Additional tangential mesh velocity boundary indicators = left, right, front, back
+
+  subsection Landlab
+    set MPI ranks for Landlab = 1
+    set Script name           = vertical_advection
+    set Script argument       =
+    set Script path           =
+
+    set Hillslope diffusion coefficient       = 1e-4
+    set Stream power erodibility coefficient  = 1e-5
+    set Define LandLab parameters using years = true
+
+    subsection Mesh information
+      set X extent = 102e3
+      set Y extent = 102e3
+      set Spacing  = 500
+    end
+  end
+end
+
+# Vertical gravity
+subsection Gravity model
+  set Model name = vertical
+
+  subsection Vertical
+    set Magnitude = 0
+  end
+end
+
+# One material with unity properties
+subsection Material model
+  set Model name = simple
+
+  subsection Simple model
+    set Reference density             = 1
+    set Reference specific heat       = 1
+    set Reference temperature         = 0
+    set Thermal conductivity          = 1
+    set Thermal expansion coefficient = 0
+    set Viscosity                     = 1
+  end
+end
+
+# We also have to specify that we want to use the Boussinesq
+# approximation (assuming the density in the temperature
+# equation to be constant, and incompressibility).
+subsection Formulation
+  set Formulation = Boussinesq approximation
+end
+
+# We here use a globally refined mesh without
+# adaptive mesh refinement.
+subsection Mesh refinement
+  set Initial global refinement                = 0
+  set Initial adaptive refinement              = 0
+  set Time steps between mesh refinement       = 0
+end
+
+subsection Postprocess
+  set List of postprocessors = visualization, topography, velocity statistics
+
+  subsection Topography
+    set Output to file = true
+    set Time between text output = 50e3
+  end
+
+  subsection Visualization
+    set Time between graphical output = 50e3
+    set Output mesh velocity = true
+    set Output mesh displacement = true
+    set Output undeformed mesh = false
+    set Interpolate output = false
+  end
+
+end
