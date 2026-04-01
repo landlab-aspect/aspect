@@ -80,6 +80,19 @@ namespace aspect
                                                    AffineConstraints<double> &constraints) const override;
 
         /**
+         * Save the Landlab state so it can later be restored during restart.
+         */
+        void
+        save (std::map<std::string, std::string> &status_strings) const override;
+
+
+        /**
+         * Restore the Landlab state from a previous checkpoint.
+         */
+        void
+        load (const std::map<std::string, std::string> &status_strings) override;
+
+        /**
          * Declare parameters.
          */
         static
@@ -125,6 +138,7 @@ namespace aspect
          * Whether the ASPECT geometry is spherical.
          */
         bool is_spherical;
+
 #ifdef ASPECT_WITH_PYTHON
         /**
          * The Python module object.
