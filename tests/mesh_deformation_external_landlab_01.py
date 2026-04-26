@@ -38,7 +38,7 @@ def finalize():
 # dict_variable_name_to_value_in_nodes is a dictionary mapping variables
 # (x velocity, y velocity, temperature, etc.) to an array of values in each
 # node.
-def update_until(end_time, dict_variable_name_to_value_in_nodes):
+def update_until(end_time, ASPECT_dim, dict_variable_name_to_value_in_nodes):
     global current_time
     dt = end_time - current_time
     
