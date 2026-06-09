@@ -18,7 +18,6 @@
   <http://www.gnu.org/licenses/>.
  */
 
-
 #include <aspect/mesh_deformation/landlab.h>
 #include <deal.II/base/exceptions.h>
 #include <deal.II/base/patterns.h>
@@ -168,11 +167,12 @@ namespace aspect
             }
 
           {
-            // set_mesh_information: call with None
+            // Initialize the Landlab model grid if needed. The Python side can
+            // guard against recreating it when a restart has already loaded state.
             PyObject *pArgs = PyTuple_Pack(1, Py_None);
             PyObject *pValue = call_python_function(pModule, "set_mesh_information", pArgs);
-            Py_DECREF(pArgs);
             Py_DECREF(pValue);
+            Py_DECREF(pArgs);
           }
 
           {
@@ -243,6 +243,7 @@ namespace aspect
         {
           // Build a dictionary with solution values for each variable to pass to Python:
           PyObject *pDict = PyDict_New();
+
           std::vector<std::string> variable_names = { "x velocity", "y velocity"};
           if (dim == 3)
             variable_names.push_back("z velocity");
@@ -269,7 +270,8 @@ namespace aspect
             }
 
           // Call update_until()
-          PyObject *pArgs = PyTuple_Pack(2, PyFloat_FromDouble(this->get_time()), pDict);
+          const double landlab_time = this->get_time() - this->get_timestep();
+          PyObject *pArgs = PyTuple_Pack(3, PyFloat_FromDouble(this->get_time()), PyFloat_FromDouble(landlab_time), pDict);
           PyObject *pValue = call_python_function(pModule, "update_until", pArgs);
           Py_DECREF(pDict);
           Py_DECREF(pArgs);
@@ -289,6 +291,8 @@ namespace aspect
 
           Py_DECREF(pValue);
         }
+
+
 
       // Produce debug output as a vtu file
 #if DEAL_II_VERSION_GTE(9,8,0)
@@ -404,6 +408,64 @@ namespace aspect
 #endif
     }
 
+
+    template <int dim>
+    void
+    Landlab<dim>::save (std::map<std::string, std::string> &status_strings) const
+    {
+#ifdef ASPECT_WITH_PYTHON
+      if (this_rank_runs_landlab)
+        {
+          const unsigned int checkpoint_id = this->get_checkpoint_id();
+
+          PyObject *pDict = PyDict_New();
+          PyDict_SetItemString(pDict, "Current checkpoint ID", PyLong_FromLong(checkpoint_id));
+          PyDict_SetItemString(pDict, "Output directory", PyUnicode_FromString(this->get_output_directory().c_str()));
+
+          PyObject *pArgs = PyTuple_Pack(1,
+                                         pDict
+                                        );
+          Py_DECREF(pDict);
+          PyObject *pValue = call_python_function(pModule, "checkpoint", pArgs);
+          Py_DECREF(pArgs);
+          Py_DECREF(pValue);
+          status_strings["Landlab Checkpoint ID"] = std::to_string(checkpoint_id);
+        }
+#else
+      (void)status_strings;
+#endif
+    }
+
+
+    template <int dim>
+    void
+    Landlab<dim>::load (const std::map<std::string, std::string> &status_strings)
+    {
+      AssertThrow(status_strings.find("Landlab Checkpoint ID") != status_strings.end(),
+                  ExcMessage("Trying to load data for Landlab from a checkpoint, but no data seems to have been written."));
+
+#ifdef ASPECT_WITH_PYTHON
+      if (this_rank_runs_landlab)
+        {
+          // Check to see whether ASPECT is restarting from a user defined checkpoint, or from the most recent checkpoint.
+          const unsigned int resume_checkpoint_id = this->get_parameters().resume_checkpoint_id == 0 ?
+                                                    std::stoi(status_strings.at("Landlab Checkpoint ID")) :
+                                                    this->get_parameters().resume_checkpoint_id;
+
+          PyObject *pDict = PyDict_New();
+          PyDict_SetItemString(pDict, "Output directory", PyUnicode_FromString(this->get_output_directory().c_str()));
+          PyDict_SetItemString(pDict, "Resume checkpoint ID", PyLong_FromLong(resume_checkpoint_id));
+
+          PyObject *pArgs = PyTuple_Pack(1,
+                                         pDict
+                                        );
+          Py_DECREF(pDict);
+          PyObject *pValue = call_python_function(pModule, "resume_checkpoint", pArgs);
+          Py_DECREF(pArgs);
+          Py_DECREF(pValue);
+        }
+#endif
+    }
 
 
     template <int dim>

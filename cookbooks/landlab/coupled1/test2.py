@@ -10,7 +10,6 @@ from landlab.components import FlowAccumulator
 from landlab.components import StreamPowerEroder
 from landlab.io.legacy_vtk import write_legacy_vtk
 
-current_time = 0
 
 comm = None
 
@@ -51,8 +50,8 @@ def finalize():
 # dict_variable_name_to_value_in_nodes is a dictionary mapping variables
 # (x velocity, y velocity, temperature, etc.) to an array of values in each
 # node.
-def update_until(end_time, dict_variable_name_to_value_in_nodes):
-    global current_time, elevation, linear_diffuser, flow_accumulator, stream_power_eroder, timestep
+def update_until(end_time, current_time, dict_variable_name_to_value_in_nodes):
+    global elevation, linear_diffuser, flow_accumulator, stream_power_eroder, timestep
     aspect_dt = end_time - current_time
     timestep += 1
     
@@ -175,5 +174,5 @@ if __name__ == "__main__":
         data["x velocity"] = np.zeros(model_grid.number_of_nodes)
         data["y velocity"] = np.zeros(model_grid.number_of_nodes)
         data["z velocity"] = np.zeros(model_grid.number_of_nodes)
-        update_until(n*dt, data)
+        update_until((n+1)*dt, n*dt, data)
         write_output(n)
