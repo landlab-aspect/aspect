@@ -6,3 +6,10 @@ set -e
 cd mpi-hello-world
 mpirun -n 2 python test.py
 cd ..
+
+
+# Check Landlab
+
+cd landlab-simple
+python linear_diffuser.py
+cd ..
