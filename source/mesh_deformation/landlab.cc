@@ -85,6 +85,11 @@ namespace aspect
     void
     Landlab<dim>::initialize ()
     {
+      // Pressure normalization doesn't really make sense with a free surface, and if we do
+      // use it, we can run into problems with geometry_model->depth().
+      AssertThrow ( this->get_parameters().pressure_normalization == "no",
+                    ExcMessage("The Landlab mesh deformation model can only be used with no pressure normalization") );
+
       // Determine whether we are in a spherical geometry or not, which affects how we interpret the coordinates of the evaluation points.
       if (Plugins::plugin_type_matches<GeometryModel::Chunk<dim>>(this->get_geometry_model()) ||
           Plugins::plugin_type_matches<GeometryModel::SphericalShell<dim>>(this->get_geometry_model()) ||

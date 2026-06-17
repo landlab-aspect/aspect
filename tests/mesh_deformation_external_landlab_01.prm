@@ -9,7 +9,7 @@ set Use years instead of seconds           = false
 set End time                               = 0.004
 set Maximum time step                      = 0.0005
 set Nonlinear solver scheme = no Advection, no Stokes
-set Pressure normalization                 = surface
+set Pressure normalization                 = no
 set Surface pressure                       = 0
 
 subsection Geometry model
