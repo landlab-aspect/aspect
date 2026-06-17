@@ -275,6 +275,8 @@ namespace aspect
           Py_DECREF(pDict);
           Py_DECREF(pArgs);
 
+          write_output();
+
           const ArrayView<const double> data = PythonHelper::numpy_to_array_view(pValue);
           const double one_over_dt = 1.0 / ((this->get_timestep() > 0.0) ? this->get_timestep() : 1.0);
           for (size_t i=0; i<data.size(); ++i)
@@ -396,6 +398,33 @@ namespace aspect
       (void)mesh_deformation_dof_handler;
       (void)boundary_indicator;
       (void)constraints;
+#endif
+    }
+
+
+
+    template <int dim>
+    void
+    Landlab<dim>::write_output() const
+    {
+      // Call Python write_output() function with current time as argument
+#ifdef ASPECT_WITH_PYTHON
+      if (this_rank_runs_landlab)
+        {
+
+          PyObject *pDict = PyDict_New();
+          PyDict_SetItemString(pDict, "ASPECT timestep", PyFloat_FromDouble(this->get_timestep_number()));
+          PyDict_SetItemString(pDict, "ASPECT time", PyFloat_FromDouble(this->get_time()));
+          PyDict_SetItemString(pDict, "ASPECT output directory", PyUnicode_FromString(this->get_output_directory().c_str()));
+
+          PyObject *pArgs = PyTuple_Pack(1,
+                                         pDict
+                                        );
+          Py_DECREF(pDict);
+          PyObject *pValue = call_python_function(pModule, "write_output", pArgs);
+          Py_DECREF(pArgs);
+          Py_DECREF(pValue);
+        }
 #endif
     }
 

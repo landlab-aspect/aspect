@@ -80,6 +80,12 @@ namespace aspect
                                                    AffineConstraints<double> &constraints) const override;
 
         /**
+         * Write output. This calls a function in the Landlab Python module to write output vtk files.
+         */
+        void
+        write_output() const;
+
+        /**
          * Declare parameters.
          */
         static
