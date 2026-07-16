@@ -5,16 +5,16 @@ import os
 import numpy as np
 import landlab
 from landlab.components import LinearDiffuser
+from landlab.io.native_landlab import save_grid, load_grid
 
 from landlab.io.legacy_vtk import write_legacy_vtk
-
 
 comm = None
 
 model_grid = None
 elevation = None
 linear_diffuser = None
-Diffusivity = None
+checkpoint_index = None
 
 s2yr = 60 * 60 * 24 * 365.25
 timestep = 0
@@ -48,7 +48,7 @@ def finalize():
 # (x velocity, y velocity, temperature, etc.) to an array of values in each
 # node.
 def update_until(end_time, current_time, dict_variable_name_to_value_in_nodes):
-    global elevation, linear_diffuser, timestep, Diffusivity
+    global elevation, linear_diffuser, timestep
 
     dt = end_time - current_time
     timestep += 1
@@ -58,28 +58,14 @@ def update_until(end_time, current_time, dict_variable_name_to_value_in_nodes):
     # Extract the velocity along the ASPECT model, which is located at y=0 on the landlab mesh.
     slice_x_velocity = dict_variable_name_to_value_in_nodes["x velocity"]
     slice_y_velocity = dict_variable_name_to_value_in_nodes["y velocity"]
-    # slice_z_velocity = dict_variable_name_to_value_in_nodes["z velocity"]
-
-    # Likewise, extract the composition along the ASPECT surface. These exactly match the names
-    # of the compositions provided to ASPECT.
-    slice_weak_composition   = dict_variable_name_to_value_in_nodes["weak"]
-    slice_strong_composition = dict_variable_name_to_value_in_nodes["strong"]
 
     # Create empty arrays to project the velocity and composition values out from y=0 to all
     # nodes on the landlab mesh.
     vertical_velocity = np.zeros(model_grid.number_of_nodes)
-    strong_composition = np.zeros(model_grid.number_of_nodes)
-    weak_composition   = np.zeros(model_grid.number_of_nodes)
 
     unique_x_values   = np.unique(model_grid.x_of_node)
     for x in unique_x_values:
         vertical_velocity[model_grid.x_of_node == x]  = slice_y_velocity[unique_x_values == x]
-        strong_composition[model_grid.x_of_node == x] = slice_strong_composition[unique_x_values == x]
-        weak_composition[model_grid.x_of_node == x]   = slice_weak_composition[unique_x_values == x]
-
-    # Modify the diffusivity based on the composition, making it very high for "weak" and low for "strong".
-    Diffusivity[strong_composition >= 0.5] = 1e-10 / s2yr
-    Diffusivity[weak_composition >= 0.5]   = 10 / s2yr
 
     # Substepping for surface processes
     if dt>0:
@@ -165,18 +151,10 @@ def get_grid_y(grid_dictionary):
     return np.zeros(np.unique(model_grid.x_of_node).shape)
 
 def initialize_landlab_components(landlab_component_parameters):
-    global model_grid, elevation, linear_diffuser, flow_accumulator, stream_power_eroder, Diffusivity
+    global model_grid, elevation, linear_diffuser
 
-    D = 1e-10 / s2yr
-    
-    # If the diffusivity is mapped to an array with the same length as the number of nodes on the landlab
-    # mesh, landlab will use those values as the diffusivity at each node. If these values are updated,
-    # landlab will also track this.
-    Diffusivity = model_grid.add_zeros("linear_diffusivity", at="node")
-    Diffusivity += D
-
-    # print("* Creating LinearDiffuser ... with D =", D)
-    linear_diffuser = LinearDiffuser(model_grid, linear_diffusivity=Diffusivity)
+    D_val = 10 / s2yr
+    linear_diffuser = LinearDiffuser(model_grid, linear_diffusivity=D_val)
     pass
 
 # Return the initial topography along y=0, where the ASPECT surface is located.
@@ -184,6 +162,42 @@ def get_initial_topography(grid_dictionary):
     global elevation
     return elevation[model_grid.y_of_node == 0]
 
+
+def checkpoint(checkpoint_dict):
+    global model_grid, checkpoint_index
+
+    # Extract checkpointing information from the checkpoint dictionary
+    checkpoint_index      = checkpoint_dict["Current checkpoint ID"]
+    output_directory      = checkpoint_dict["Output directory"]
+
+    # Create LandLab checkpoint directory within the ASPECT output directory.
+    output_directory = os.path.join(output_directory, "landlab_checkpoints")
+    os.makedirs(output_directory, exist_ok=True)
+
+    print("Checkpointing the LandLab model grid...")
+    filename = os.path.join(output_directory, f"landlab_checkpoint_{str(checkpoint_index).zfill(2)}.grid")
+    save_grid(model_grid, filename, clobber=True)
+    pass
+
+def resume_checkpoint(checkpoint_dict):
+    global model_grid, elevation, checkpoint_index
+
+    restart_checkpoint_id = checkpoint_dict["Resume checkpoint ID"]
+
+    # Extract checkpointing information from the checkpoint dictionary
+    output_directory = checkpoint_dict["Output directory"]
+    output_directory = os.path.join(output_directory, "landlab_checkpoints")
+
+    # Load the LandLab grid from the checkpoint file corresponding to the checkpoint index.
+    print("Loading the LandLab model grid...")
+    filename = os.path.join(output_directory, f"landlab_checkpoint_{str(restart_checkpoint_id).zfill(2)}.grid")
+    model_grid = load_grid(filename)
+    elevation = model_grid.at_node["topographic__elevation"]
+
+    # We need to initialize the components after loading the LandLab grid, since these
+    # are not stored.
+    initialize_landlab_components(None)
+    pass
 
 def write_output(timestep):
     # Write the grid to vtk
@@ -203,5 +217,5 @@ if __name__ == "__main__":
         data["x velocity"] = np.zeros(model_grid.number_of_nodes)
         data["y velocity"] = np.zeros(model_grid.number_of_nodes)
         data["z velocity"] = np.zeros(model_grid.number_of_nodes)
-        update_until((n+1)*dt, n*dt, data)
+        update_until(n*dt, data)
         write_output(n)
